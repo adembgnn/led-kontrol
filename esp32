@@ -1,0 +1,141 @@
+#define MQTT_MAX_PACKET_SIZE 512 
+
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <PubSubClient.h>
+#include <ESP32Servo.h>
+
+const char* ssid = "YOUR_WIFI_SSID";
+const char* password = "YOUR_WIFI_PASSWORD";
+
+const char* mqtt_server = "YOUR_MQTT_BROKER_ADDRESS";
+const int mqtt_port = 8883;
+const char* mqtt_user = "YOUR_MQTT_USERNAME";
+const char* mqtt_pass = "YOUR_MQTT_PASSWORD";
+
+const char* topic_led = "evim/led_kontrol";
+const char* topic_servo = "evim/servo";
+const char* topic_durum = "evim/cihaz_durum";
+
+const int led1 = 2;
+const int servoPin = 18;
+
+int currentAngle = 180; 
+
+Servo myServo;
+WiFiClientSecure espClient;
+PubSubClient client(espClient);
+
+void callback(char* topic, byte* payload, unsigned int length) {
+  char msgBuffer[length + 1]; 
+  for (int i = 0; i < length; i++) {
+    msgBuffer[i] = (char)payload[i];
+  }
+  msgBuffer[length] = '\0';
+  
+  String message = String(msgBuffer);
+  String currentTopic = String(topic);
+  
+  Serial.println("\n[MESAJ GELDI] Topic: " + currentTopic + " | Mesaj: " + message);
+
+  if (currentTopic == topic_servo) {
+    if (message == "RESET") {
+      currentAngle = 0;
+      Serial.println("Servo SIFIRLANDI.");
+    } else {
+      int moveBy = message.toInt(); 
+      currentAngle = currentAngle + moveBy; 
+    }
+    
+    currentAngle = constrain(currentAngle, 0, 360); 
+    int pwmDegeri = map(currentAngle, 0, 360, 500, 2400);
+    myServo.writeMicroseconds(pwmDegeri);
+    
+    Serial.println("Açı: " + String(currentAngle));
+  }
+  else if (currentTopic == topic_led) {
+    if (message == "LED1_ON")  digitalWrite(led1, HIGH);
+    else if (message == "LED1_OFF") digitalWrite(led1, LOW);
+  }
+}
+
+void connectWifi() {
+  if (WiFi.status() == WL_CONNECTED) return;
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
+  WiFi.begin(ssid, password);
+  
+  int tries = 0;
+  while (WiFi.status() != WL_CONNECTED && tries < 30) {
+    delay(500);
+    Serial.print(".");
+    tries++;
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nWiFi OK! IP: " + WiFi.localIP().toString());
+  } else {
+    ESP.restart();
+  }
+}
+
+void connectMQTT() {
+  espClient.setInsecure();
+  client.setServer(mqtt_server, mqtt_port);
+  client.setCallback(callback);
+  client.setKeepAlive(60);
+
+  while (!client.connected()) {
+    Serial.print("MQTT baglaniyor...");
+    String clientId = "ESP32-" + String(random(0, 9999));
+    
+    if (client.connect(clientId.c_str(), mqtt_user, mqtt_pass)) {
+      Serial.println("MQTT OK!");
+      client.subscribe(topic_led, 1);
+      client.subscribe(topic_servo, 1);
+    } else {
+      delay(3000);
+      if (WiFi.status() != WL_CONNECTED) break; 
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  
+  pinMode(led1, OUTPUT);
+  digitalWrite(led1, LOW);
+  
+  ESP32PWM::allocateTimer(0);
+  ESP32PWM::allocateTimer(1);
+  ESP32PWM::allocateTimer(2);
+  ESP32PWM::allocateTimer(3);
+  myServo.setPeriodHertz(50);
+  myServo.attach(servoPin, 500, 2400);
+  
+  int baslangicPWM = map(currentAngle, 0, 360, 500, 2400);
+  myServo.writeMicroseconds(baslangicPWM);
+  
+  connectWifi();
+  connectMQTT();
+}
+
+void loop() {
+  if (WiFi.status() != WL_CONNECTED) connectWifi();
+  if (!client.connected()) connectMQTT();
+  
+  client.loop();
+
+  static unsigned long lastHeartbeat = 0;
+  if (millis() - lastHeartbeat > 10000) {
+    bool mesajGitti = client.publish(topic_durum, "aktif");
+    if (!mesajGitti) {
+      client.disconnect(); 
+    } else {
+      client.subscribe(topic_led, 1);
+      client.subscribe(topic_servo, 1);
+      Serial.println("Stabilite OK | Heap: " + String(ESP.getFreeHeap()));
+    }
+    lastHeartbeat = millis();
+  }
+  delay(10); 
+}
