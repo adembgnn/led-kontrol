@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LED Kontrol Paneli</title>
+  <title>LED Kontrol</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.1.0/paho-mqtt.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -22,15 +22,19 @@
       font-size: 0.9rem;
       color: #888;
       margin-bottom: 2rem;
+      padding: 6px 14px;
+      border-radius: 20px;
+      background: #e0e0e0;
     }
-    #status.connected { color: #2e7d32; font-weight: 600; }
-    #status.error { color: #c62828; font-weight: 600; }
+    #status.connected { background: #c8e6c9; color: #2e7d32; font-weight: 600; }
+    #status.error { background: #ffcdd2; color: #c62828; font-weight: 600; }
+    #status.reconnecting { background: #fff9c4; color: #f57f17; font-weight: 600; }
     .grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
       gap: 1rem;
       width: 100%;
-      max-width: 600px;
+      max-width: 560px;
     }
     .card {
       background: white;
@@ -41,115 +45,132 @@
     }
     .card h2 { font-size: 1rem; color: #555; margin-bottom: 1rem; }
     .bulb {
-      width: 60px; height: 60px;
+      width: 56px; height: 56px;
       border-radius: 50%;
       margin: 0 auto 1rem;
       background: #ddd;
       transition: background 0.3s, box-shadow 0.3s;
     }
-    .bulb.on {
-      background: #FFD600;
-      box-shadow: 0 0 20px #FFD600;
-    }
+    .bulb.on { background: #FFD600; box-shadow: 0 0 18px #FFD600; }
     .btn-group { display: flex; gap: 8px; justify-content: center; }
     button {
-      padding: 8px 18px;
+      padding: 8px 16px;
       border: none;
       border-radius: 8px;
       cursor: pointer;
-      font-size: 0.9rem;
+      font-size: 0.85rem;
       font-weight: 600;
-      transition: opacity 0.2s;
+      transition: opacity 0.2s, transform 0.1s;
     }
-    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    button:active { transform: scale(0.96); }
+    button:disabled { opacity: 0.35; cursor: not-allowed; }
     .btn-on  { background: #2e7d32; color: white; }
     .btn-off { background: #c62828; color: white; }
-    .btn-on:hover:not(:disabled)  { opacity: 0.85; }
-    .btn-off:hover:not(:disabled) { opacity: 0.85; }
   </style>
 </head>
 <body>
-  <h1>💡 LED Kontrol Paneli</h1>
+  <h1>💡 LED Kontrol</h1>
   <p id="status">Bağlanıyor...</p>
-
+ 
   <div class="grid">
     <div class="card">
       <h2>LED 1</h2>
       <div class="bulb" id="bulb1"></div>
       <div class="btn-group">
-        <button class="btn-on"  onclick="send('LED1_ON',  'bulb1')" disabled id="b1on">AÇ</button>
-        <button class="btn-off" onclick="send('LED1_OFF', 'bulb1')" disabled id="b1off">KAPAT</button>
+        <button class="btn-on"  onclick="send('LED1_ON','bulb1')"  disabled>AÇ</button>
+        <button class="btn-off" onclick="send('LED1_OFF','bulb1')" disabled>KAPAT</button>
       </div>
     </div>
     <div class="card">
       <h2>LED 2</h2>
       <div class="bulb" id="bulb2"></div>
       <div class="btn-group">
-        <button class="btn-on"  onclick="send('LED2_ON',  'bulb2')" disabled id="b2on">AÇ</button>
-        <button class="btn-off" onclick="send('LED2_OFF', 'bulb2')" disabled id="b2off">KAPAT</button>
+        <button class="btn-on"  onclick="send('LED2_ON','bulb2')"  disabled>AÇ</button>
+        <button class="btn-off" onclick="send('LED2_OFF','bulb2')" disabled>KAPAT</button>
       </div>
     </div>
     <div class="card">
       <h2>LED 3</h2>
       <div class="bulb" id="bulb3"></div>
       <div class="btn-group">
-        <button class="btn-on"  onclick="send('LED3_ON',  'bulb3')" disabled id="b3on">AÇ</button>
-        <button class="btn-off" onclick="send('LED3_OFF', 'bulb3')" disabled id="b3off">KAPAT</button>
+        <button class="btn-on"  onclick="send('LED3_ON','bulb3')"  disabled>AÇ</button>
+        <button class="btn-off" onclick="send('LED3_OFF','bulb3')" disabled>KAPAT</button>
       </div>
     </div>
   </div>
-
+ 
   <script>
-    const BROKER   = "342319a9d06340038c3a61d7d58a09a2.s1.eu.hivemq.cloud";
-    const PORT     = 8884; // WebSocket port
-    const USER     = "ademm";
-    const PASS     = "0531nNaA";
-    const TOPIC    = "evim/led_kontrol";
-
+    const BROKER = "342319a9d06340038c3a61d7d58a09a2.s1.eu.hivemq.cloud";
+    const PORT   = 8884;
+    const USER   = "ademm";
+    const PASS   = "0531nNaA";
+    const TOPIC  = "evim/led_kontrol";
+ 
     const statusEl = document.getElementById("status");
     const allBtns  = document.querySelectorAll("button");
-
-    const clientId = "WebPanel-" + Math.floor(Math.random() * 10000);
-    const client   = new Paho.Client(BROKER, PORT, "/mqtt", clientId);
-
-    client.onConnectionLost = () => {
-      statusEl.textContent = "Bağlantı kesildi, yeniden deneniyor...";
-      statusEl.className = "error";
-      allBtns.forEach(b => b.disabled = true);
-      setTimeout(connect, 3000);
-    };
-
+ 
+    let client;
+    let reconnectTimer;
+ 
+    function setStatus(text, cls) {
+      statusEl.textContent = text;
+      statusEl.className = cls;
+    }
+ 
+    function setBtns(enabled) {
+      allBtns.forEach(b => b.disabled = !enabled);
+    }
+ 
     function connect() {
-      statusEl.textContent = "Bağlanıyor...";
-      statusEl.className = "";
+      clearTimeout(reconnectTimer);
+      const clientId = "Web-" + Math.floor(Math.random() * 99999);
+      client = new Paho.Client(BROKER, PORT, "/mqtt", clientId);
+ 
+      client.onConnectionLost = (res) => {
+        setStatus("⚠ Bağlantı koptu, yeniden bağlanıyor...", "reconnecting");
+        setBtns(false);
+        reconnectTimer = setTimeout(connect, 3000);
+      };
+ 
+      setStatus("Bağlanıyor...", "");
       client.connect({
         useSSL: true,
         userName: USER,
         password: PASS,
+        keepAliveInterval: 30,
         onSuccess: () => {
-          statusEl.textContent = "✓ Bağlı — " + BROKER;
-          statusEl.className = "connected";
-          allBtns.forEach(b => b.disabled = false);
+          setStatus("✓ Bağlı", "connected");
+          setBtns(true);
         },
         onFailure: (err) => {
-          statusEl.textContent = "Hata: " + err.errorMessage;
-          statusEl.className = "error";
-          setTimeout(connect, 5000);
+          setStatus("✗ Bağlanamadı: " + err.errorMessage, "error");
+          setBtns(false);
+          reconnectTimer = setTimeout(connect, 5000);
         }
       });
     }
-
+ 
     function send(message, bulbId) {
+      if (!client || !client.isConnected()) {
+        setStatus("⚠ Bağlı değil, yeniden bağlanıyor...", "reconnecting");
+        connect();
+        return;
+      }
       const msg = new Paho.Message(message);
       msg.destinationName = TOPIC;
       msg.qos = 1;
       client.send(msg);
-
-      const bulb = document.getElementById(bulbId);
-      bulb.classList.toggle("on", message.endsWith("ON"));
+      document.getElementById(bulbId).classList.toggle("on", message.endsWith("ON"));
     }
-
+ 
     connect();
+ 
+    // Sayfa görünür olduğunda bağlantıyı kontrol et (telefon uyku modundan dönünce)
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && (!client || !client.isConnected())) {
+        connect();
+      }
+    });
   </script>
 </body>
 </html>
