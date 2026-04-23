@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Servo Kontrol</title>
+  <title>Servo Bağıl Kontrol</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.1.0/paho-mqtt.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -57,15 +57,6 @@
       margin-top: 4px;
     }
 
-    .slider-wrap {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      margin-bottom: 1.4rem;
-    }
-    .slider-wrap span { font-size: 11px; color: #bbb; min-width: 26px; text-align: center; }
-    input[type=range] { flex: 1; accent-color: #3b82f6; cursor: pointer; }
-
     .row { display: flex; gap: 8px; margin-bottom: 1.2rem; }
     .row input[type=number] {
       flex: 1;
@@ -94,20 +85,34 @@
 
     .presets { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
     .presets button {
-      padding: 9px 4px;
+      padding: 10px 4px;
       border: 1px solid #e5e7eb;
       border-radius: 10px;
       background: white;
-      font-size: 0.82rem;
-      font-weight: 500;
+      font-size: 0.9rem;
+      font-weight: bold;
       cursor: pointer;
-      color: #555;
+      color: #333;
     }
     .presets button:hover:not(:disabled) { border-color: #3b82f6; color: #3b82f6; background: #f0f6ff; }
     .presets button:disabled { opacity: 0.35; cursor: not-allowed; }
+    
+    .btn-reset {
+      width: 100%;
+      margin-top: 10px;
+      padding: 12px;
+      background: #ef4444;
+      color: white;
+      border: none;
+      border-radius: 10px;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    .btn-reset:hover:not(:disabled) { background: #dc2626; }
+    .btn-reset:disabled { background: #fca5a5; cursor: not-allowed; }
 
     .sent-wrap {
-      margin-top: 1.2rem;
+      margin-top: 1.5rem;
       padding: 10px 14px;
       background: #f9fafb;
       border-radius: 10px;
@@ -128,29 +133,25 @@
       <canvas id="gauge" width="220" height="125"></canvas>
     </div>
 
-    <div class="angle-display" id="angleDisplay">90</div>
-    <div class="angle-label">derece</div>
-
-    <div class="slider-wrap">
-      <span>0°</span>
-      <input type="range" id="slider" min="0" max="360" value="90" step="1">
-      <span>360°</span>
-    </div>
+    <div class="angle-display" id="angleDisplay">180</div>
+    <div class="angle-label">Tahmini Mutlak Konum</div>
 
     <div class="row">
-      <input type="number" id="numInput" min="0" max="360" value="90" placeholder="0 – 360">
-      <button class="primary" id="sendBtn" onclick="sendCurrent()" disabled>Gönder</button>
+      <input type="number" id="numInput" value="45" placeholder="Örn: -45 veya 90">
+      <button class="primary" id="sendBtn" onclick="sendCustom()" disabled>Gönder</button>
     </div>
 
     <div class="presets">
-      <button class="preset-btn" onclick="setAngle(0)"   disabled>0°</button>
-      <button class="preset-btn" onclick="setAngle(90)"  disabled>90°</button>
-      <button class="preset-btn" onclick="setAngle(180)" disabled>180°</button>
-      <button class="preset-btn" onclick="setAngle(360)" disabled>360°</button>
+      <button onclick="sendRelative(-90)" disabled>-90°</button>
+      <button onclick="sendRelative(-15)" disabled>-15°</button>
+      <button onclick="sendRelative(15)"  disabled>+15°</button>
+      <button onclick="sendRelative(90)"  disabled>+90°</button>
     </div>
+    
+    <button class="btn-reset" onclick="sendReset()" disabled>SIFIRLA (0 Noktasına Git)</button>
 
     <div class="sent-wrap">
-      <span>Son gönderilen</span>
+      <span>Son Gönderilen Komut</span>
       <strong id="lastSent">—</strong>
     </div>
   </div>
@@ -164,12 +165,14 @@
 
     const statusEl    = document.getElementById("status");
     const angleDisplay= document.getElementById("angleDisplay");
-    const slider      = document.getElementById("slider");
     const numInput    = document.getElementById("numInput");
     const lastSent    = document.getElementById("lastSent");
     const allBtns     = document.querySelectorAll("button");
 
     let client, reconnectTimer;
+    
+    // Uygulama kendi içinde ESP32 ile aynı olan 180 başlangıç noktasını tutar
+    let localAngle = 180; 
 
     function setStatus(t, c) { statusEl.textContent = t; statusEl.className = c; }
     function setBtns(e) { allBtns.forEach(b => b.disabled = !e); }
@@ -179,12 +182,16 @@
       const ctx = canvas.getContext("2d");
       const cx = 110, cy = 115, r = 90;
       ctx.clearRect(0, 0, 220, 125);
+      
+      // Arka plan çizgisi
       ctx.beginPath();
       ctx.arc(cx, cy, r, Math.PI, 2 * Math.PI);
       ctx.strokeStyle = "#f0f0f0";
       ctx.lineWidth = 16;
       ctx.lineCap = "round";
       ctx.stroke();
+      
+      // Dolu çizgi
       const progress = (angle / 360) * Math.PI;
       if (progress > 0) {
         ctx.beginPath();
@@ -194,63 +201,73 @@
         ctx.lineCap = "round";
         ctx.stroke();
       }
+      
+      // Uç noktası topu
       const nx = cx + r * Math.cos(Math.PI + progress);
       const ny = cy + r * Math.sin(Math.PI + progress);
       ctx.beginPath();
       ctx.arc(nx, ny, 9, 0, 2 * Math.PI);
       ctx.fillStyle = "#3b82f6";
       ctx.fill();
+      
+      // Merkez noktası
       ctx.beginPath();
       ctx.arc(cx, cy, 5, 0, 2 * Math.PI);
       ctx.fillStyle = "#cbd5e1";
       ctx.fill();
     }
 
-    // Sadece görsel güncelle, mesaj gönderme
-    function setAngle(angle) {
-      angle = Math.max(0, Math.min(360, Math.round(angle)));
-      slider.value = angle;
-      numInput.value = angle;
-      angleDisplay.textContent = angle;
-      drawGauge(angle);
-      // preset butonlar için direkt gönder
-      sendAngle(angle);
+    // Arayüzdeki ibreyi tahmini olarak güncelleyen fonksiyon
+    function updateLocalDisplay(change) {
+      localAngle += change;
+      localAngle = Math.max(0, Math.min(360, localAngle)); // ESP32'deki constrain mantığının aynısı
+      angleDisplay.textContent = localAngle;
+      drawGauge(localAngle);
     }
 
-    // Gönder butonuna basınca çalışır
-    function sendCurrent() {
+    // Gönder butonu tıklandığında (Serbest sayı)
+    function sendCustom() {
       const val = parseInt(numInput.value);
       if (isNaN(val)) return;
-      const angle = Math.max(0, Math.min(360, val));
-      slider.value = angle;
-      numInput.value = angle;
-      angleDisplay.textContent = angle;
-      drawGauge(angle);
-      sendAngle(angle);
+      sendRelative(val);
     }
 
-    function sendAngle(angle) {
+    // Eksi veya artı komutu MQTT'ye gönderen fonksiyon
+    function sendRelative(val) {
       if (!client || !client.isConnected()) {
         setStatus("Bağlı değil, yeniden bağlanıyor...", "reconnecting");
         connect();
         return;
       }
-      const msg = new Paho.Message(String(angle));
+      
+      // Değeri doğrudan string olarak yolla (Örn: "-45" veya "90")
+      const msg = new Paho.Message(String(val));
       msg.destinationName = TOPIC;
       msg.qos = 1;
       client.send(msg);
-      lastSent.textContent = angle + "°";
+      
+      // Arayüzü güncelle
+      updateLocalDisplay(val);
+      
+      // Ekrana yaz (Pozitifse başına + koy)
+      lastSent.textContent = (val > 0 ? "+" : "") + val;
+    }
+    
+    // Özel SIFIRLA Komutu
+    function sendReset() {
+      if (!client || !client.isConnected()) return;
+      const msg = new Paho.Message("RESET");
+      msg.destinationName = TOPIC;
+      msg.qos = 1;
+      client.send(msg);
+      
+      localAngle = 0;
+      angleDisplay.textContent = localAngle;
+      drawGauge(localAngle);
+      lastSent.textContent = "RESET";
     }
 
-    // Slider sadece görseli günceller, mesaj göndermez
-    slider.addEventListener("input", () => {
-      const angle = parseInt(slider.value);
-      numInput.value = angle;
-      angleDisplay.textContent = angle;
-      drawGauge(angle);
-    });
-
-    numInput.addEventListener("keydown", e => { if (e.key === "Enter") sendCurrent(); });
+    numInput.addEventListener("keydown", e => { if (e.key === "Enter") sendCustom(); });
 
     function connect() {
       clearTimeout(reconnectTimer);
@@ -280,7 +297,8 @@
       if (!document.hidden && (!client || !client.isConnected())) connect();
     });
 
-    drawGauge(90);
+    // Başlangıçta ibreyi 180'e hizala
+    drawGauge(180);
     connect();
   </script>
 </body>
